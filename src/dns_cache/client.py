@@ -3,6 +3,8 @@ import logging
 
 from dnslib import DNSRecord
 
+from dns_cache.cache import Cache
+
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class ClientProtocol(asyncio.DatagramProtocol):
         super().__init__()
         self.query_q = query_q
         self.result_q = result_q
-        self.query_dict = {}
+        self.client_dict = {}
         asyncio.async(self.send_query())
 
     def connection_made(self, transport):
@@ -29,7 +31,7 @@ class ClientProtocol(asyncio.DatagramProtocol):
 
         dns = DNSRecord.parse(data)
         key = (dns.header.id, dns.q.qname, dns.q.qtype)
-        addr = self.query_dict[key]
+        addr = self.client_dict[key]
 
         asyncio.async(self.result_q.put((data, addr)))
 
@@ -47,6 +49,6 @@ class ClientProtocol(asyncio.DatagramProtocol):
             data, addr = yield from self.query_q.get()
             dns = DNSRecord.parse(data)
             key = (dns.header.id, dns.q.qname, dns.q.qtype)
-            self.query_dict[key] = addr
+            self.client_dict[key] = addr
             logger.debug('>>>> {}'.format(data))
             self.transport.sendto(data)
