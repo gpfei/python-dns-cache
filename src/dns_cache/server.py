@@ -1,4 +1,8 @@
 import asyncio
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class ServerProtocol(asyncio.DatagramProtocol):
@@ -12,25 +16,19 @@ class ServerProtocol(asyncio.DatagramProtocol):
         super().__init__()
         self.query_q = query_q
         self.result_q = result_q
-        self.sending_result = False
-        self.loop = asyncio.get_event_loop()
+
+        asyncio.async(self.send_result())
 
     def connection_made(self, transport):
         self.transport = transport
 
     def datagram_received(self, data, addr):
-        print(addr)
-        print('Received %r from %s' % (data, addr))
-
-        if not self.sending_result:
-            asyncio.async(self.send_result)
-            self.sending_result = True
-
-        self.loop.run_until_complete(self.query_q.put((data, addr)))
-        print(self.query_q)
+        logger.debug('<<<< {} from {}'.format(data, addr))
+        asyncio.async(self.query_q.put((data, addr)))
 
     @asyncio.coroutine
     def send_result(self):
-        data, addr = yield from self.result_q.get()
-        print('Send %r to %s' % (data, addr))
-        self.transport.sendto(data, addr)
+        while True:
+            data, addr = yield from self.result_q.get()
+            logger.debug('>>>> {} to {}'.format(data, addr))
+            self.transport.sendto(data, addr)

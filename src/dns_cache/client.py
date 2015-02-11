@@ -1,6 +1,10 @@
 import asyncio
+import logging
 
 from dnslib import DNSRecord
+
+
+logger = logging.getLogger(__name__)
 
 
 class ClientProtocol(asyncio.DatagramProtocol):
@@ -14,40 +18,35 @@ class ClientProtocol(asyncio.DatagramProtocol):
         self.query_q = query_q
         self.result_q = result_q
         self.query_dict = {}
-        self.sending_query = False
+        asyncio.async(self.send_query())
 
     def connection_made(self, transport):
+        logger.info("Connection made.")
         self.transport = transport
 
-    @asyncio.coroutine
-    def _datagram_received(self, data, addr):
-        if not self.sending_query:
-            asyncio.async(self.send_query)
-            self.sending_query = True
-
-        print('client ...', data, addr)
-        yield from self.result_q.put((data, addr))
-
     def datagram_received(self, data, addr):
-        print("Client Received:", data)
+        logger.debug("<<<< {} from {}".format(data, addr))
+
         dns = DNSRecord.parse(data)
         key = (dns.header.id, dns.q.qname, dns.q.qtype)
-        addr = self.query_dict(key)
+        addr = self.query_dict[key]
 
-        self._datagram_received(data, addr)
+        asyncio.async(self.result_q.put((data, addr)))
 
     def error_received(self, exc):
-        print('Error received:', exc)
+        logger.error('Error received:', exc)
 
     def connection_lost(self, exc):
-        print("Socket closed, stop the event loop")
+        logger.info("Socket closed, stop the event loop")
         loop = asyncio.get_event_loop()
         loop.stop()
 
     @asyncio.coroutine
     def send_query(self):
-        data, addr = yield from self.query_q.get()
-        dns = DNSRecord.parse(data)
-        key = (dns.header.id, dns.q.qname, dns.q.qtype)
-        self.query_dict[key] = addr
-        seld.transport.sendto(data)
+        while True:
+            data, addr = yield from self.query_q.get()
+            dns = DNSRecord.parse(data)
+            key = (dns.header.id, dns.q.qname, dns.q.qtype)
+            self.query_dict[key] = addr
+            logger.debug('>>>> {}'.format(data))
+            self.transport.sendto(data)
