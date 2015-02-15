@@ -1,36 +1,42 @@
 import asyncio
 import logging
 
-from dns_cache.server import ServerProtocol
-from dns_cache.client import ClientProtocol
+from dns_cache.client import TCPClient, UDPClient
+from dns_cache.server import TCPServer, UDPServer
 
 
 logging.basicConfig(level=logging.DEBUG)
+
+logger = logging.getLogger(__name__)
 
 
 def main():
     query_q = asyncio.Queue()
     result_q = asyncio.Queue()
+
     loop = asyncio.get_event_loop()
 
-    listen = loop.create_datagram_endpoint(
-        lambda: ServerProtocol(query_q, result_q),
-        local_addr=('127.0.0.1', 53))
-    s_transport, s_protocol = loop.run_until_complete(listen)
+    logger.debug('Creating UDP server ...')
+    udp_server = UDPServer('127.0.0.1', 53, query_q, result_q)
 
-    connect = loop.create_datagram_endpoint(
-        lambda: ClientProtocol(query_q, result_q),
-        remote_addr=('223.5.5.5', 53))
-    c_transport, c_protocol = loop.run_until_complete(connect)
+    #logger.debug('Creating TCP server ...')
+    #tcp_server = TCPServer('127.0.0.1', 53, query_q, result_q)
 
+    logger.debug('Connecting ...')
+    #tcp_client = TCPClient('223.5.5.5', 53, query_q, result_q)
+    udp_client = UDPClient('223.5.5.5', 53, query_q, result_q)
+
+    logger.debug('Running ...')
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
 
-    s_transport.close()
-    c_transport.close()
+    #s_transport.close()
+    #server.close()
+    #c_transport.close()
     loop.close()
+
 
 if __name__ == '__main__':
     main()
