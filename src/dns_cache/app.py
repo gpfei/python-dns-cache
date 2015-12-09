@@ -1,36 +1,53 @@
 import asyncio
 import logging
+import traceback
 
-from dns_cache.client import TCPClient, UDPClient
-from dns_cache.server import TCPServer, UDPServer
+from client import UDPClient
+from server import UDPServer, handle_tcp
+from settings import REMOTE_SERVERS, LISTEN
 
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARN)
 
 logger = logging.getLogger(__name__)
 
 
 def main():
-    query_q = asyncio.Queue()
-    result_q = asyncio.Queue()
-
     loop = asyncio.get_event_loop()
 
-    logger.debug('Creating UDP server ...')
-    udp_server = UDPServer('127.0.0.1', 53, query_q, result_q)
+    UDP = True
+    TCP = False
 
-    #logger.debug('Creating TCP server ...')
-    #tcp_server = TCPServer('127.0.0.1', 53, query_q, result_q)
+    udp_server = tcp_server = None
 
-    logger.debug('Connecting ...')
-    #tcp_client = TCPClient('223.5.5.5', 53, query_q, result_q)
-    udp_client = UDPClient('223.5.5.5', 53, query_q, result_q)
+    host, port = LISTEN
+
+    if UDP:
+        query_q = asyncio.Queue()
+        result_q = asyncio.Queue()
+
+        logger.debug('Creating UDP server ...')
+        udp_server = UDPServer(host, port, query_q, result_q)
+
+        logger.debug('Connecting ...')
+        udp_client = UDPClient(REMOTE_SERVERS, query_q, result_q)
+
+    if TCP:
+        logger.debug('Creating TCP server ...')
+        coro = asyncio.start_server(handle_tcp, host, port, loop=loop)
+        tcp_server = loop.run_until_complete(coro)
 
     logger.debug('Running ...')
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
+    except Exception:
+        traceback.print_exc()
+
+    if tcp_server:
+        tcp_server.close()
+        loop.run_until_complete(tcp_server.wait_closed())
 
     #s_transport.close()
     #server.close()

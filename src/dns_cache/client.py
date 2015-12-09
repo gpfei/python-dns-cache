@@ -1,9 +1,7 @@
 import asyncio
 import logging
 
-from dnslib import DNSRecord
-
-from dns_cache.cache import Cache
+from dnslib import DNSRecord, DNSError
 
 
 logger = logging.getLogger(__name__)
@@ -15,8 +13,9 @@ class UDPClientProtocol(asyncio.DatagramProtocol):
 
     """
 
-    def __init__(self, query_q, result_q):
+    def __init__(self, client, query_q, result_q):
         super().__init__()
+        self.client = client
         self.query_q = query_q
         self.result_q = result_q
         self.client_dict = {}
@@ -24,28 +23,38 @@ class UDPClientProtocol(asyncio.DatagramProtocol):
         asyncio.async(self.send_query())
 
     def connection_made(self, transport):
-        logger.info("Connection made.")
+        peername = transport.get_extra_info('peername')
+        logger.info('Connection to {}'.format(peername))
         self.transport = transport
 
     def datagram_received(self, data, addr):
         logger.debug("<<<< {} from {}".format(data, addr))
 
-        dns = DNSRecord.parse(data)
-        key = (dns.header.id, dns.q.qname, dns.q.qtype)
-        addr = self.client_dict[key]
-
-        asyncio.async(self.result_q.put((data, addr)))
+        try:
+            dns = DNSRecord.parse(data)
+            key = (dns.header.id, dns.q.qname, dns.q.qtype)
+            addr = self.client_dict.pop(key)
+        except (DNSError, KeyError):
+            logger.info('Invalid DNS answer from {}. {}'.format(addr, data))
+        else:
+            asyncio.async(self.result_q.put((data, addr)))
 
     def error_received(self, exc):
         logger.error('Error received:', exc)
 
     def connection_lost(self, exc):
-        logger.info("Socket closed, stop the event loop")
+        logger.debug('The remote UDP server closed the connection. '
+                     'Re-connecting ...')
         loop = asyncio.get_event_loop()
-        loop.stop()
+        loop.create_task(self.client.connect())
 
     @asyncio.coroutine
     def send_query(self):
+        if getattr(self, '__sending_query', None):
+            return
+        else:
+            setattr(self, '__sending_query', True)
+
         while True:
             data, addr = yield from self.query_q.get()
             dns = DNSRecord.parse(data)
@@ -61,46 +70,33 @@ class TCPClientProtocol(asyncio.Protocol):
 
     """
 
-    def __init__(self, query_q, result_q):
+    def __init__(self, client):
         super().__init__()
-        self.query_q = query_q
-        self.result_q = result_q
-
-        asyncio.async(self.send_query())
+        self.client = client
 
     def connection_made(self, transport):
-        logger.info("Connection made.")
+        logger.info("Remote TCP Connection made.")
         self.transport = transport
 
     def data_received(self, data):
         logger.debug("<<<< {} from {}".format(data, self.transport))
+        self.client.send_data(data)
 
-        dns = DNSRecord.parse(data)
-        key = (dns.header.id, dns.q.qname, dns.q.qtype)
-
-        asyncio.async(self.result_q.put((data, key)))
+    def send_data(self, data):
+        self.transport.write(data)
 
     def error_received(self, exc):
         logger.error('Error received:', exc)
 
     def connection_lost(self, exc):
-        logger.info("Socket closed, stop the event loop")
-        loop = asyncio.get_event_loop()
-        loop.stop()
-
-    @asyncio.coroutine
-    def send_query(self):
-        while True:
-            data, key = yield from self.query_q.get()
-            logger.debug('>>>> {}'.format(key))
-            self.transport.write(data)
+        logger.debug('The remote TCP server closed the connection. '
+                     'Re-connecting ...')
 
 
-class BaseClient():
+class UDPClient():
 
-    def __init__(self, host, port, query_q, result_q):
-        self.host = host
-        self.port = port
+    def __init__(self, servers, query_q, result_q):
+        self.servers = servers
         self.query_q = query_q
         self.result_q = result_q
 
@@ -109,24 +105,11 @@ class BaseClient():
 
     @asyncio.coroutine
     def connect(self):
-        pass
+        logger.debug('UDPClient connecting remote servers.')
 
+        for host, port in self.servers:
+            transport, protocol = yield from self.loop.create_datagram_endpoint(
+                lambda: UDPClientProtocol(self, self.query_q, self.result_q),
+                remote_addr=(host, port))
 
-class UDPClient(BaseClient):
-
-    @asyncio.coroutine
-    def connect(self):
-        logger.debug('UDPClient connect.')
-        self.transport, self.protocol = yield from self.loop.create_datagram_endpoint(
-            lambda: UDPClientProtocol(self.query_q, self.result_q),
-            remote_addr=(self.host, self.port))
-
-
-class TCPClient(BaseClient):
-
-    @asyncio.coroutine
-    def connect(self):
-        logger.debug('TCPClient connect.')
-        self.client = yield from self.loop.create_connection(
-            lambda: TCPClientProtocol(self.query_q, self.result_q),
-            self.host, self.port)
+        logger.debug('UDPClient connect done.')
